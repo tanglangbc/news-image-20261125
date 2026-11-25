@@ -1,75 +1,82 @@
 #!/usr/bin/env python3
-"""news-image-20261125 — "THE WORLD TODAY", Wednesday 25 November 2026.
+"""THE WORLD TODAY — Wednesday 25 November 2026.
 
-Sums up 25 November 2026 world news in one 1024x1024 image.
+A one-day newspaper front page summing up 25 November 2026 world news,
+drawn as a single 1024x1024 PNG.
 
-Python 3.12+ (stdlib only — no PIL). Own PNG encoder via zlib/struct.
-Deterministic: two runs produce byte-identical output (no timestamps,
-no randomness, fixed zlib level).
+Standard library only (no PIL): the program keeps its own pixel buffer and
+its own PNG encoder. Deterministic — no clock, no randomness, fixed
+compression — so two runs write byte-identical files.
 
-Usage: MAKEFUN_OUTPUT_DIR=out python3 main.py   -> writes entry.png
+Run:  MAKEFUN_OUTPUT_DIR=out python3 main.py   -> out/entry.png
 """
 import os
 import struct
 import zlib
 
-W, H = 1024, 1024
+SIZE = 1024
 
-# ---------------------------------------------------------------- palette
-PAPER   = (245, 241, 232)
-NAVY    = (20, 33, 61)
-INK     = (24, 24, 24)
-GREY    = (90, 90, 90)
-RULE    = (180, 172, 155)
-WHITE   = (255, 255, 255)
-TEAL    = (14, 116, 110)
-GREEN   = (34, 139, 60)
-ORANGE  = (214, 92, 20)
-BLUE    = (30, 90, 168)
-RED     = (178, 34, 34)
-PURPLE  = (106, 76, 147)
-GOLD    = (201, 162, 39)
+# ink and paper
+PAPER = (245, 241, 232)
+NAVY = (20, 33, 61)
+INK = (24, 24, 24)
+GREY = (90, 90, 90)
+FAINT = (180, 172, 155)
+WHITE = (255, 255, 255)
+TEAL = (14, 116, 110)
+LEAF = (34, 139, 60)
+EMBER = (214, 92, 20)
+ROYAL = (30, 90, 168)
+CRIMSON = (178, 34, 34)
+PLUM = (106, 76, 147)
+BRASS = (201, 162, 39)
+SMOKE = (200, 200, 200)
+AMBER = (255, 200, 40)
 
-# ---------------------------------------------------------------- canvas
-px = bytearray(PAPER * W * H)
-
-
-def set_px(x, y, c):
-    if 0 <= x < W and 0 <= y < H:
-        i = (y * W + x) * 3
-        px[i], px[i + 1], px[i + 2] = c
+buf = bytearray(PAPER * SIZE * SIZE)
 
 
-def rect(x, y, w, h, c):
+def put(x, y, colour):
+    """Paint one pixel of the buffer, clipping to the page."""
+    if 0 <= x < SIZE and 0 <= y < SIZE:
+        off = (y * SIZE + x) * 3
+        buf[off], buf[off + 1], buf[off + 2] = colour
+
+
+def fill(x, y, w, h, colour):
+    """Paint a solid rectangle."""
     for yy in range(y, y + h):
-        for xx in range(x, x + w):
-            set_px(xx, yy, c)
+        base = (yy * SIZE + x) * 3
+        for xx in range(w):
+            o = base + xx * 3
+            buf[o], buf[o + 1], buf[o + 2] = colour
 
 
-def hline(x0, x1, y, c, t=1):
-    for yy in range(y, y + t):
+def hbar(x0, x1, y, colour, thick=1):
+    for yy in range(y, y + thick):
         for xx in range(x0, x1 + 1):
-            set_px(xx, yy, c)
+            put(xx, yy, colour)
 
 
-def vline(x, y0, y1, c, t=1):
-    for xx in range(x, x + t):
+def vbar(x, y0, y1, colour, thick=1):
+    for xx in range(x, x + thick):
         for yy in range(y0, y1 + 1):
-            set_px(xx, yy, c)
+            put(xx, yy, colour)
 
 
-def line(x0, y0, x1, y1, c, t=1):
+def seg(x0, y0, x1, y1, colour, thick=1):
+    """Bresenham segment between two points."""
     dx, dy = abs(x1 - x0), abs(y1 - y0)
     sx = 1 if x0 < x1 else -1
     sy = 1 if y0 < y1 else -1
     err = dx - dy
     x, y = x0, y0
     while True:
-        for a in range(t):
-            for b in range(t):
-                set_px(x + a, y + b, c)
+        for a in range(thick):
+            for b in range(thick):
+                put(x + a, y + b, colour)
         if x == x1 and y == y1:
-            break
+            return
         e2 = 2 * err
         if e2 > -dy:
             err -= dy
@@ -79,121 +86,125 @@ def line(x0, y0, x1, y1, c, t=1):
             y += sy
 
 
-def circle(cx, cy, r, c, fill=False):
+def ring(cx, cy, r, colour):
     for yy in range(cy - r, cy + r + 1):
         for xx in range(cx - r, cx + r + 1):
             d = (xx - cx) ** 2 + (yy - cy) ** 2
-            if fill:
-                if d <= r * r:
-                    set_px(xx, yy, c)
-            else:
-                if r * r - 2 * r <= d <= r * r:
-                    set_px(xx, yy, c)
+            if r * r - 2 * r <= d <= r * r:
+                put(xx, yy, colour)
 
 
-def disc(cx, cy, r, c):
-    circle(cx, cy, r, c, fill=True)
+def dot(cx, cy, r, colour):
+    for yy in range(cy - r, cy + r + 1):
+        for xx in range(cx - r, cx + r + 1):
+            if (xx - cx) ** 2 + (yy - cy) ** 2 <= r * r:
+                put(xx, yy, colour)
 
 
-def tri(x0, y0, x1, y1, x2, y2, c):
-    # filled triangle via scanlines
+def wedge(x0, y0, x1, y1, x2, y2, colour):
+    """Filled triangle, painted scanline by scanline."""
     pts = sorted([(x0, y0), (x1, y1), (x2, y2)], key=lambda p: p[1])
     (ax, ay), (bx, by), (cx, cy) = pts
+
+    def at(p, q, y):
+        if q[1] == p[1]:
+            return p[0]
+        return p[0] + (q[0] - p[0]) * (y - p[1]) / (q[1] - p[1])
+
     for y in range(ay, cy + 1):
-        def interp(p, q):
-            if q[1] == p[1]:
-                return p[0]
-            return p[0] + (q[0] - p[0]) * (y - p[1]) / (q[1] - p[1])
         if y <= by:
-            xa, xb = interp((ax, ay), (bx, by)), interp((ax, ay), (cx, cy))
+            lo, hi = at((ax, ay), (bx, by), y), at((ax, ay), (cx, cy), y)
         else:
-            xa, xb = interp((bx, by), (cx, cy)), interp((ax, ay), (cx, cy))
-        for x in range(int(min(xa, xb)), int(max(xa, xb)) + 1):
-            set_px(x, y, c)
+            lo, hi = at((bx, by), (cx, cy), y), at((ax, ay), (cx, cy), y)
+        for x in range(int(min(lo, hi)), int(max(lo, hi)) + 1):
+            put(x, y, colour)
 
 
-# ---------------------------------------------------------------- 5x7 font
-FONT = {
-    'A': ("01110","10001","10001","11111","10001","10001","10001"),
-    'B': ("11110","10001","10001","11110","10001","10001","11110"),
-    'C': ("01110","10001","10000","10000","10000","10001","01110"),
-    'D': ("11110","10001","10001","10001","10001","10001","11110"),
-    'E': ("11111","10000","10000","11110","10000","10000","11111"),
-    'F': ("11111","10000","10000","11110","10000","10000","10000"),
-    'G': ("01110","10001","10000","10111","10001","10001","01111"),
-    'H': ("10001","10001","10001","11111","10001","10001","10001"),
-    'I': ("01110","00100","00100","00100","00100","00100","01110"),
-    'J': ("00111","00010","00010","00010","00010","10010","01100"),
-    'K': ("10001","10010","10100","11000","10100","10010","10001"),
-    'L': ("10000","10000","10000","10000","10000","10000","11111"),
-    'M': ("10001","11011","10101","10101","10001","10001","10001"),
-    'N': ("10001","11001","10101","10011","10001","10001","10001"),
-    'O': ("01110","10001","10001","10001","10001","10001","01110"),
-    'P': ("11110","10001","10001","11110","10000","10000","10000"),
-    'Q': ("01110","10001","10001","10001","10101","10010","01101"),
-    'R': ("11110","10001","10001","11110","10100","10010","10001"),
-    'S': ("01111","10000","10000","01110","00001","00001","11110"),
-    'T': ("11111","00100","00100","00100","00100","00100","00100"),
-    'U': ("10001","10001","10001","10001","10001","10001","01110"),
-    'V': ("10001","10001","10001","10001","10001","01010","00100"),
-    'W': ("10001","10001","10001","10101","10101","11011","10001"),
-    'X': ("10001","10001","01010","00100","01010","10001","10001"),
-    'Y': ("10001","10001","01010","00100","00100","00100","00100"),
-    'Z': ("11111","00001","00010","00100","01000","10000","11111"),
-    '0': ("01110","10001","10011","10101","11001","10001","01110"),
-    '1': ("00100","01100","00100","00100","00100","00100","01110"),
-    '2': ("01110","10001","00001","00110","01000","10000","11111"),
-    '3': ("11111","00010","00100","00010","00001","10001","01110"),
-    '4': ("00010","00110","01010","10010","11111","00010","00010"),
-    '5': ("11111","10000","11110","00001","00001","10001","01110"),
-    '6': ("00110","01000","10000","11110","10001","10001","01110"),
-    '7': ("11111","00001","00010","00100","01000","01000","01000"),
-    '8': ("01110","10001","10001","01110","10001","10001","01110"),
-    '9': ("01110","10001","10001","01111","00001","00010","01100"),
-    ' ': ("00000","00000","00000","00000","00000","00000","00000"),
-    '-': ("00000","00000","00000","01110","00000","00000","00000"),
-    ',': ("00000","00000","00000","00000","00100","00100","01000"),
-    '.': ("00000","00000","00000","00000","00000","01100","01100"),
-    "'": ("00100","00100","01000","00000","00000","00000","00000"),
-    ':': ("00000","01100","01100","00000","01100","01100","00000"),
-    '/': ("00001","00010","00010","00100","01000","01000","10000"),
-    '(': ("00010","00100","01000","01000","01000","00100","00010"),
-    ')': ("01000","00100","00010","00010","00010","00100","01000"),
-    '&': ("01100","10010","10100","01000","10101","10010","01101"),
-    '%': ("11001","11010","00010","00100","01000","01011","10011"),
-    '+': ("00000","00100","00100","11111","00100","00100","00000"),
-    '!': ("00100","00100","00100","00100","00100","00000","00100"),
-    '?': ("01110","10001","00001","00110","00100","00000","00100"),
+# ------------------------------------------------------------------ lettering
+# A 5x7 bitmap face. Each glyph is seven rows; each row is a 5-bit number,
+# most significant bit on the left (e.g. A opens 01110 = 14).
+FACE = {
+    'A': (14, 17, 17, 31, 17, 17, 17),
+    'B': (30, 17, 17, 30, 17, 17, 30),
+    'C': (14, 17, 16, 16, 16, 17, 14),
+    'D': (30, 17, 17, 17, 17, 17, 30),
+    'E': (31, 16, 16, 30, 16, 16, 31),
+    'F': (31, 16, 16, 30, 16, 16, 16),
+    'G': (14, 17, 16, 23, 17, 17, 15),
+    'H': (17, 17, 17, 31, 17, 17, 17),
+    'I': (14, 4, 4, 4, 4, 4, 14),
+    'J': (7, 2, 2, 2, 2, 18, 12),
+    'K': (17, 18, 20, 24, 20, 18, 17),
+    'L': (16, 16, 16, 16, 16, 16, 31),
+    'M': (17, 27, 21, 21, 17, 17, 17),
+    'N': (17, 25, 21, 19, 17, 17, 17),
+    'O': (14, 17, 17, 17, 17, 17, 14),
+    'P': (30, 17, 17, 30, 16, 16, 16),
+    'Q': (14, 17, 17, 17, 21, 18, 13),
+    'R': (30, 17, 17, 30, 20, 18, 17),
+    'S': (15, 16, 16, 14, 1, 1, 30),
+    'T': (31, 4, 4, 4, 4, 4, 4),
+    'U': (17, 17, 17, 17, 17, 17, 14),
+    'V': (17, 17, 17, 17, 17, 10, 4),
+    'W': (17, 17, 17, 21, 21, 27, 17),
+    'X': (17, 17, 10, 4, 10, 17, 17),
+    'Y': (17, 17, 10, 4, 4, 4, 4),
+    'Z': (31, 1, 2, 4, 8, 16, 31),
+    '0': (14, 17, 19, 21, 25, 17, 14),
+    '1': (4, 12, 4, 4, 4, 4, 14),
+    '2': (14, 17, 1, 6, 8, 16, 31),
+    '3': (31, 2, 4, 2, 1, 17, 14),
+    '4': (2, 6, 10, 18, 31, 2, 2),
+    '5': (31, 16, 30, 1, 1, 17, 14),
+    '6': (6, 8, 16, 30, 17, 17, 14),
+    '7': (31, 1, 2, 4, 8, 8, 8),
+    '8': (14, 17, 17, 14, 17, 17, 14),
+    '9': (14, 17, 17, 15, 1, 2, 12),
+    ' ': (0, 0, 0, 0, 0, 0, 0),
+    '-': (0, 0, 0, 14, 0, 0, 0),
+    ',': (0, 0, 0, 0, 4, 4, 8),
+    '.': (0, 0, 0, 0, 0, 12, 12),
+    "'": (4, 4, 8, 0, 0, 0, 0),
+    ':': (0, 12, 12, 0, 12, 12, 0),
+    '/': (1, 2, 2, 4, 8, 8, 16),
+    '(': (2, 4, 8, 8, 8, 4, 2),
+    ')': (8, 4, 2, 2, 2, 4, 8),
+    '&': (12, 18, 20, 8, 21, 18, 13),
+    '%': (25, 26, 2, 4, 8, 11, 19),
+    '+': (0, 4, 4, 31, 4, 4, 0),
+    '!': (4, 4, 4, 4, 4, 0, 4),
+    '?': (14, 17, 1, 6, 4, 0, 4),
 }
 
 
-def text_w(s, scale):
+def text_width(s, scale):
     return len(s) * 6 * scale - scale
 
 
-def draw_text(x, y, s, scale, c):
+def put_text(x, y, s, scale, colour):
+    """Paint a string left-aligned at (x, y)."""
     cx = x
     for ch in s:
-        g = FONT.get(ch, FONT[' '])
-        for r, row in enumerate(g):
-            for cc, bit in enumerate(row):
-                if bit == '1':
-                    rect(cx + cc * scale, y + r * scale, scale, scale, c)
+        rows = FACE.get(ch, FACE[' '])
+        for r, bits in enumerate(rows):
+            for col in range(5):
+                if bits >> (4 - col) & 1:
+                    fill(cx + col * scale, y + r * scale, scale, scale, colour)
         cx += 6 * scale
     return cx
 
 
-def draw_centered(y, s, scale, c, cx=W // 2):
-    draw_text(cx - text_w(s, scale) // 2, y, s, scale, c)
+def put_centred(y, s, scale, colour):
+    put_text(SIZE // 2 - text_width(s, scale) // 2, y, s, scale, colour)
 
 
-def wrap(s, scale, max_w):
-    """Greedy word wrap; returns list of lines that fit max_w."""
-    words, lines, cur = s.split(' '), [], ''
-    for w in words:
-        t = (cur + ' ' + w).strip()
-        if text_w(t, scale) <= max_w:
-            cur = t
+def wrap_text(s, scale, max_w):
+    """Greedy word wrap into lines no wider than max_w."""
+    lines, cur = [], ''
+    for w in s.split(' '):
+        trial = (cur + ' ' + w).strip()
+        if text_width(trial, scale) <= max_w:
+            cur = trial
         else:
             if cur:
                 lines.append(cur)
@@ -203,173 +214,169 @@ def wrap(s, scale, max_w):
     return lines
 
 
-# ---------------------------------------------------------------- pictograms
-def pic_tower(x, y, s):
-    # Riyadh's tallest skyscraper, struck: tower + blast cloud at the top
-    cx, cy = x + s // 2, y + s // 2
-    rect(cx - 26, cy - 52, 52, 110, NAVY)
+# ------------------------------------------------------------------ pictures
+# Each pictogram fills a 160x160 box whose top-left corner is (x, y).
+
+def pic_tower(x, y):
+    """Riyadh's tallest tower, struck a second time in a week."""
+    cx, cy = x + 80, y + 80
+    fill(cx - 26, cy - 52, 52, 112, NAVY)
     for k in range(5):
-        rect(cx - 18, cy - 42 + k * 20, 36, 8, GOLD)
-    tri(cx - 26, cy - 52, cx + 26, cy - 52, cx, cy - 70, NAVY)
-    disc(cx + 6, cy - 62, 18, ORANGE)
-    disc(cx - 12, cy - 52, 12, (255, 200, 40))
-    disc(cx + 22, cy - 44, 10, (200, 200, 200))
-    disc(cx - 28, cy - 66, 9, (200, 200, 200))
-    rect(cx - 44, cy + 58, 88, 6, GREY)
+        fill(cx - 18, cy - 42 + k * 20, 36, 8, BRASS)
+    wedge(cx - 26, cy - 52, cx + 26, cy - 52, cx, cy - 72, NAVY)
+    dot(cx + 8, cy - 62, 17, EMBER)
+    dot(cx - 13, cy - 50, 11, AMBER)
+    dot(cx + 24, cy - 42, 9, SMOKE)
+    dot(cx - 30, cy - 66, 8, SMOKE)
+    hbar(cx - 46, cx + 46, cy + 60, GREY, 6)
 
 
-def pic_stamp(x, y, s):
-    # official document under investigation: paper + red seal
-    cx, cy = x + s // 2, y + s // 2
-    rect(cx - 52, cy - 56, 104, 116, WHITE)
-    vline(cx - 52, cy - 56, cy + 60, INK, 3)
-    vline(cx + 52, cy - 56, cy + 60, INK, 3)
-    hline(cx - 52, cx + 52, cy - 56, INK, 3)
-    hline(cx - 52, cx + 52, cy + 60, INK, 3)
+def pic_stamp(x, y):
+    """A file under investigation: paper, lines of text, a red seal."""
+    cx, cy = x + 80, y + 80
+    fill(cx - 52, cy - 56, 104, 116, WHITE)
+    vbar(cx - 52, cy - 56, cy + 60, INK, 3)
+    vbar(cx + 52, cy - 56, cy + 60, INK, 3)
+    hbar(cx - 52, cx + 52, cy - 56, INK, 3)
+    hbar(cx - 52, cx + 52, cy + 60, INK, 3)
     for k in range(4):
-        hline(cx - 40, cx + 40, cy - 34 + k * 16, GREY, 3)
-    circle(cx + 16, cy + 14, 26, RED)
-    circle(cx + 16, cy + 14, 18, RED)
-    rect(cx + 8, cy + 6, 16, 16, RED)
+        hbar(cx - 40, cx + 40, cy - 34 + k * 16, GREY, 3)
+    ring(cx + 16, cy + 14, 26, CRIMSON)
+    ring(cx + 16, cy + 14, 18, CRIMSON)
+    fill(cx + 8, cy + 6, 16, 16, CRIMSON)
 
 
-def pic_chip_down(x, y, s):
-    # AI chip with a falling arrow: the comeback rally fades
-    cx, cy = x + s // 2, y + s // 2
-    rect(cx - 42, cy - 42, 84, 84, NAVY)
-    rect(cx - 26, cy - 26, 52, 52, GREEN)
-    rect(cx - 14, cy - 14, 28, 28, WHITE)
+def pic_chipdown(x, y):
+    """A chip with a falling arrow: the comeback rally fades."""
+    cx, cy = x + 80, y + 80
+    fill(cx - 42, cy - 42, 84, 84, NAVY)
+    fill(cx - 26, cy - 26, 52, 52, LEAF)
+    fill(cx - 14, cy - 14, 28, 28, WHITE)
     for k in range(4):
-        rect(cx - 42 + k * 22, cy - 54, 10, 12, NAVY)
-        rect(cx - 42 + k * 22, cy + 42, 10, 12, NAVY)
-        rect(cx - 54, cy - 42 + k * 22, 12, 10, NAVY)
-        rect(cx + 42, cy - 42 + k * 22, 12, 10, NAVY)
-    # falling arrow
-    rect(cx + 29, cy - 58, 10, 34, RED)
-    tri(cx + 22, cy - 24, cx + 46, cy - 24, cx + 34, cy - 2, RED)
+        fill(cx - 42 + k * 22, cy - 54, 10, 12, NAVY)
+        fill(cx - 42 + k * 22, cy + 42, 10, 12, NAVY)
+        fill(cx - 54, cy - 42 + k * 22, 12, 10, NAVY)
+        fill(cx + 42, cy - 42 + k * 22, 12, 10, NAVY)
+    fill(cx + 29, cy - 58, 10, 34, CRIMSON)
+    wedge(cx + 22, cy - 24, cx + 46, cy - 24, cx + 34, cy - 2, CRIMSON)
 
 
-def pic_jet(x, y, s):
-    # fighter jet entering an air defence zone, seen from above
-    cx, cy = x + s // 2, y + s // 2
-    tri(cx, cy - 58, cx - 14, cy + 10, cx + 14, cy + 10, GREY)
-    tri(cx - 12, cy - 10, cx - 58, cy + 34, cx - 12, cy + 18, GREY)
-    tri(cx + 12, cy - 10, cx + 58, cy + 34, cx + 12, cy + 18, GREY)
-    tri(cx - 10, cy + 10, cx - 22, cy + 44, cx - 2, cy + 30, GREY)
-    tri(cx + 10, cy + 10, cx + 22, cy + 44, cx + 2, cy + 30, GREY)
-    disc(cx, cy - 30, 6, RED)
-    # dashed zone boundary below
+def pic_jet(x, y):
+    """A jet crossing into an air defence zone, seen from above."""
+    cx, cy = x + 80, y + 80
+    wedge(cx, cy - 58, cx - 14, cy + 10, cx + 14, cy + 10, GREY)
+    wedge(cx - 12, cy - 10, cx - 58, cy + 34, cx - 12, cy + 18, GREY)
+    wedge(cx + 12, cy - 10, cx + 58, cy + 34, cx + 12, cy + 18, GREY)
+    wedge(cx - 10, cy + 10, cx - 22, cy + 44, cx - 2, cy + 30, GREY)
+    wedge(cx + 10, cy + 10, cx + 22, cy + 44, cx + 2, cy + 30, GREY)
+    dot(cx, cy - 30, 6, CRIMSON)
     for k in range(6):
-        hline(cx - 66 + k * 24, cx - 48 + k * 24, cy + 58, BLUE, 3)
+        hbar(cx - 66 + k * 24, cx - 48 + k * 24, cy + 58, ROYAL, 3)
 
 
-def pic_store(x, y, s):
-    # supermarket storefront with awning, three figures inside
-    cx, cy = x + s // 2, y + s // 2
-    rect(cx - 58, cy - 30, 116, 76, TEAL)
+def pic_store(x, y):
+    """A supermarket front with a striped awning and three figures."""
+    cx, cy = x + 80, y + 80
+    fill(cx - 58, cy - 30, 116, 76, TEAL)
     for k in range(6):
-        rect(cx - 58 + k * 20, cy - 46, 20, 16, RED if k % 2 == 0 else WHITE)
-    rect(cx - 58, cy - 46, 116, 4, INK)
-    rect(cx - 40, cy - 8, 26, 54, WHITE)
-    rect(cx + 14, cy - 8, 26, 54, WHITE)
+        fill(cx - 58 + k * 20, cy - 46, 20, 16, CRIMSON if k % 2 == 0 else WHITE)
+    hbar(cx - 58, cx + 58, cy - 46, INK, 4)
+    fill(cx - 40, cy - 8, 26, 54, WHITE)
+    fill(cx + 14, cy - 8, 26, 54, WHITE)
     for k in range(3):
-        disc(cx - 34 + k * 34, cy + 18, 9, NAVY)
-    rect(cx - 58, cy + 46, 116, 6, INK)
+        dot(cx - 34 + k * 34, cy + 18, 9, NAVY)
+    hbar(cx - 58, cx + 58, cy + 46, INK, 6)
 
 
-def pic_medal(x, y, s):
-    # Medal of Freedom: ribbon + gold disc with star
-    cx, cy = x + s // 2, y + s // 2
-    tri(cx - 26, cy - 58, cx - 2, cy - 58, cx - 14, cy - 6, RED)
-    tri(cx + 2, cy - 58, cx + 26, cy - 58, cx + 14, cy - 6, BLUE)
-    disc(cx, cy + 22, 34, GOLD)
-    circle(cx, cy + 22, 26, (150, 110, 10))
-    tri(cx, cy - 2, cx + 7, cy + 16, cx - 7, cy + 16, WHITE)
-    tri(cx, cy + 46, cx + 7, cy + 28, cx - 7, cy + 28, WHITE)
+def pic_medal(x, y):
+    """The Medal of Freedom: a ribbon and a gold disc with a star."""
+    cx, cy = x + 80, y + 80
+    wedge(cx - 26, cy - 58, cx - 2, cy - 58, cx - 14, cy - 6, CRIMSON)
+    wedge(cx + 2, cy - 58, cx + 26, cy - 58, cx + 14, cy - 6, ROYAL)
+    dot(cx, cy + 22, 34, BRASS)
+    ring(cx, cy + 22, 26, (150, 110, 10))
+    wedge(cx, cy - 2, cx + 7, cy + 16, cx - 7, cy + 16, WHITE)
+    wedge(cx, cy + 46, cx + 7, cy + 28, cx - 7, cy + 28, WHITE)
 
 
-# ---------------------------------------------------------------- stories
+# ------------------------------------------------------------------ the day
+# (kicker, accent, pictogram, headline, sub-headline)
 STORIES = [
-    # (kicker, accent, pic, headline, caption)
-    ("MIDDLE EAST", ORANGE, pic_tower,
+    ("MIDDLE EAST", EMBER, pic_tower,
      "HOUTHIS HIT RIYADH TOWER AGAIN", "SECOND STRIKE IN A WEEK, 11 HURT"),
-    ("CHINA", RED, pic_stamp,
+    ("CHINA", CRIMSON, pic_stamp,
      "CHINA PROBES TOP OFFICIAL", "SHANGHAI CHIEF CHEN JINING HELD"),
-    ("TECH", GREEN, pic_chip_down,
+    ("TECH", LEAF, pic_chipdown,
      "HUANG IN THERAPY", "NVIDIA COMEBACK RALLY FADES"),
-    ("SECURITY", BLUE, pic_jet,
+    ("SECURITY", ROYAL, pic_jet,
      "RUSSIAN JETS IN KOREA ZONE", "SEOUL: PLANES IN DEFENCE ZONE"),
     ("COLOMBIA", TEAL, pic_store,
      "HOSTAGE STANDOFF IN CARTAGENA", "25 HELD AFTER FAILED RAID"),
-    ("USA", GOLD, pic_medal,
+    ("USA", BRASS, pic_medal,
      "TRUMP HONOURS GIULIANI", "MEDAL OF FREEDOM AWARDED"),
 ]
 
 
-def draw():
-    # masthead
-    rect(0, 0, W, 128, NAVY)
-    draw_centered(18, "THE WORLD TODAY", 8, WHITE)
-    rect(0, 96, W, 3, GOLD)
-    draw_centered(106, "WEDNESDAY, 25 NOVEMBER 2026", 3, GOLD)
+def draw_page():
+    """Paint the masthead, six story panels and the footer."""
+    fill(0, 0, SIZE, 128, NAVY)
+    put_centred(18, "THE WORLD TODAY", 8, WHITE)
+    hbar(0, SIZE - 1, 96, BRASS, 3)
+    put_centred(106, "WEDNESDAY, 25 NOVEMBER 2026", 3, BRASS)
 
-    # grid: 2 cols x 3 rows
-    m, gap = 16, 16
-    pw = (W - 2 * m - gap) // 2          # 488
-    ph = (968 - 144 - 2 * gap) // 3      # 264
-    for i, (kick, accent, pic, head, cap) in enumerate(STORIES):
+    margin, gap = 16, 16
+    panel_w = (SIZE - 2 * margin - gap) // 2
+    panel_h = (968 - 144 - 2 * gap) // 3
+    for i, (kicker, accent, pic, head, sub) in enumerate(STORIES):
         col, row = i % 2, i // 2
-        px0 = m + col * (pw + gap)
-        py0 = 144 + row * (ph + gap)
-        rect(px0, py0, pw, ph, WHITE)
-        rect(px0, py0, pw, 8, accent)
-        # thin border
-        hline(px0, px0 + pw - 1, py0 + ph - 1, RULE, 2)
-        vline(px0, py0, py0 + ph - 1, RULE, 2)
-        vline(px0 + pw - 1, py0, py0 + ph - 1, RULE, 2)
-        draw_text(px0 + 18, py0 + 20, kick, 2, accent)
-        # pictogram zone (left)
-        pic(px0 + 14, py0 + 66, 160)
-        # headline + caption (right of pictogram)
-        tx = px0 + 184
-        max_w = pw - 184 - 14
-        y = py0 + 76
-        for ln in wrap(head, 4, max_w):
-            draw_text(tx, y, ln, 4, INK)
+        x0 = margin + col * (panel_w + gap)
+        y0 = 144 + row * (panel_h + gap)
+        fill(x0, y0, panel_w, panel_h, WHITE)
+        fill(x0, y0, panel_w, 8, accent)
+        hbar(x0, x0 + panel_w - 1, y0 + panel_h - 1, FAINT, 2)
+        vbar(x0, y0, y0 + panel_h - 1, FAINT, 2)
+        vbar(x0 + panel_w - 1, y0, y0 + panel_h - 1, FAINT, 2)
+        put_text(x0 + 18, y0 + 20, kicker, 2, accent)
+        pic(x0 + 14, y0 + 66)
+        tx = x0 + 184
+        max_w = panel_w - 184 - 14
+        y = y0 + 76
+        for ln in wrap_text(head, 4, max_w):
+            put_text(tx, y, ln, 4, INK)
             y += 34
         y += 8
-        for ln in wrap(cap, 3, max_w):
-            draw_text(tx, y, ln, 3, GREY)
+        for ln in wrap_text(sub, 3, max_w):
+            put_text(tx, y, ln, 3, GREY)
             y += 26
 
-    # footer
-    hline(16, W - 17, 984, RULE, 2)
-    draw_centered(996, "SIX STORIES . ONE DAY . 25 NOVEMBER 2026", 2, GREY)
+    hbar(16, SIZE - 17, 984, FAINT, 2)
+    put_centred(996, "SIX STORIES . ONE DAY . 25 NOVEMBER 2026", 2, GREY)
 
 
-# ---------------------------------------------------------------- PNG encode
-def chunk(typ, data):
-    c = struct.pack(">I", len(data)) + typ + data
-    return c + struct.pack(">I", zlib.crc32(typ + data) & 0xFFFFFFFF)
+# ------------------------------------------------------------------ PNG out
+def png_chunk(kind, data):
+    body = struct.pack(">I", len(data)) + kind + data
+    return body + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
 
 
-def encode_png():
-    raw = bytearray()
-    for y in range(H):
-        raw.append(0)  # filter: none
-        raw += px[y * W * 3:(y + 1) * W * 3]
-    ihdr = struct.pack(">IIBBBBB", W, H, 8, 2, 0, 0, 0)
+def render_png():
+    """Encode the buffer as a 1024x1024 RGB PNG (filter: none)."""
+    rows = bytearray()
+    for y in range(SIZE):
+        rows.append(0)
+        rows += buf[y * SIZE * 3:(y + 1) * SIZE * 3]
+    header = struct.pack(">IIBBBBB", SIZE, SIZE, 8, 2, 0, 0, 0)
     return (b"\x89PNG\r\n\x1a\n"
-            + chunk(b"IHDR", ihdr)
-            + chunk(b"IDAT", zlib.compress(bytes(raw), 9))
-            + chunk(b"IEND", b""))
+            + png_chunk(b"IHDR", header)
+            + png_chunk(b"IDAT", zlib.compress(bytes(rows), 9))
+            + png_chunk(b"IEND", b""))
 
 
 def main():
     out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR", "./out")
     os.makedirs(out_dir, exist_ok=True)
-    draw()
-    data = encode_png()
+    draw_page()
+    data = render_png()
     path = os.path.join(out_dir, "entry.png")
     with open(path, "wb") as f:
         f.write(data)
